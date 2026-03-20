@@ -78,9 +78,11 @@ void initGLFW() {
         std::cerr << "Failed ot initialize GLFW!";
         exit(1);
     }
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_PLATFORM, GLFW_PLATFORM_WAYLAND);
-    glfwWindowHintString(GLFW_WAYLAND_APP_ID, "WebGPU");
+    #if !defined(__EMSCRIPTEN__)
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        glfwWindowHint(GLFW_PLATFORM, GLFW_PLATFORM_WAYLAND);
+        glfwWindowHintString(GLFW_WAYLAND_APP_ID, "WebGPU");
+    #endif
     window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "WebGPU", nullptr, nullptr);
 }
 
