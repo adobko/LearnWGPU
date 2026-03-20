@@ -41,7 +41,7 @@ void initAdapter() {
         wgpu::CallbackMode::WaitAnyOnly, 
         [](wgpu::RequestAdapterStatus status, wgpu::Adapter a, wgpu::StringView message){
             if (status != wgpu::RequestAdapterStatus::Success) {
-                std::cerr << "Adapter: " << message;
+                std::cerr << "Adapter: " << message << std::endl;
                 exit(1);
             }
             adapter = std::move(a);
@@ -56,7 +56,7 @@ void initDevice() {
     wgpu::DeviceDescriptor desc{};
     desc.SetUncapturedErrorCallback(
         [](const wgpu::Device&, wgpu::ErrorType errorType, wgpu::StringView message) {
-            std::cout << "Error: " << errorType << " - message: " << message << "\n";
+            std::cout << "Error: " << errorType << " - message: " << message << std::endl;
         }
     );
     wgpu::Future f = adapter.RequestDevice(
@@ -64,7 +64,7 @@ void initDevice() {
         wgpu::CallbackMode::WaitAnyOnly, 
         [](wgpu::RequestDeviceStatus status, wgpu::Device d, wgpu::StringView message){
             if (status != wgpu::RequestDeviceStatus::Success) {
-                std::cerr << "Device" << message;
+                std::cerr << "Device" << message << std::endl;
                 exit(1);
             }
             device = std::move(d);
