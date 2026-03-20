@@ -1,10 +1,12 @@
-cmake --build build
-./build/app
+#!/bin/bash
 
-# while ! hyprctl clients | grep -q "class: opengl_test_app"; do
-#     sleep 0.01
-# done
+cmake --build build -j4
+build/app
 
-# hyprctl dispatch togglefloating class:"opengl_test_app" > /dev/null
-# hyprctl dispatch resizewindowpixel exact 800 600,class:"opengl_test_app" > /dev/null
-# hyprctl dispatch centerwindow class:"opengl_test_app" > /dev/null
+while ! hyprctl clients | grep -q "class: WebGPU"; do
+    sleep 0.01
+done
+
+hyprctl dispatch togglefloating class:"WebGPU" > /dev/null
+hyprctl dispatch resizewindowpixel exact 800 600,class:"WebGPU" > /dev/null
+hyprctl dispatch centerwindow class:"WebGPU" > /dev/null
