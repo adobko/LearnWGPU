@@ -1,5 +1,6 @@
 #!/bin/bash
 
+#cmake -B build
 cmake --build build -j4
 build/app
 
