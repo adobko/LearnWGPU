@@ -1,5 +1,12 @@
 #include <iostream>
+#include <fstream>
+#include <string>
 #include <GLFW/glfw3.h>
+
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #if defined(__EMSCRIPTEN__)
     #include <emscripten/emscripten.h>
@@ -7,34 +14,66 @@
     #include <dawn/webgpu_cpp_print.h>
     #include <webgpu/webgpu_glfw.h>
 #endif
-
 #include <webgpu/webgpu_cpp.h>
 
 struct App {
-    GLFWwindow*          window   = nullptr;
-    wgpu::Instance       instance = nullptr;
-    wgpu::Adapter        adapter  = nullptr;
-    wgpu::Surface        surface  = nullptr;
-    wgpu::Device         device   = nullptr;
-    wgpu::RenderPipeline pipeline = nullptr;
-    wgpu::TextureFormat  format   = wgpu::TextureFormat::BGRA8Unorm;
+    GLFWwindow*          window       = nullptr;
+    wgpu::Instance       instance     = nullptr;
+    wgpu::Adapter        adapter      = nullptr;
+    wgpu::Surface        surface      = nullptr;
+    wgpu::Device         device       = nullptr;
+    wgpu::RenderPipeline pipeline     = nullptr;
+    wgpu::Buffer         vertexBuffer = nullptr;
+    wgpu::Buffer         indexBuffer  = nullptr;
+    wgpu::Texture        depthTexture = nullptr;
+    wgpu::TextureFormat  format       = wgpu::TextureFormat::BGRA8Unorm;
     const int wWidth = 800, wHeight = 600;
-    const char* wTitle = (char*)"WebGPU";
+    const char* wTitle = "WebGPU";
 };
 
 static App app;
 
-const char shaderSource[] = R"(
-    @vertex fn vertexMain(@builtin(vertex_index) i : u32) -> @builtin(position) vec4f {
-        const pos = array(vec2f(0, 1), vec2f(-1, -1), vec2f(1, -1));
-        return vec4f(pos[i], 0, 1);
+// clang-format off
+const float vertices[] = {
+//   x      y      z
+    -0.5f, -0.5f, -0.5f,  // 0 back-bottom-left
+     0.5f, -0.5f, -0.5f,  // 1 back-bottom-right
+     0.5f,  0.5f, -0.5f,  // 2 back-top-right
+    -0.5f,  0.5f, -0.5f,  // 3 back-top-left
+    -0.5f, -0.5f,  0.5f,  // 4 front-bottom-left
+     0.5f, -0.5f,  0.5f,  // 5 front-bottom-right
+     0.5f,  0.5f,  0.5f,  // 6 front-top-right
+    -0.5f,  0.5f,  0.5f,  // 7 front-top-left
+};
+
+const uint16_t indices[] = {
+    0, 2, 1,  0, 3, 2,  // back
+    4, 5, 6,  4, 6, 7,  // front
+    0, 4, 7,  0, 7, 3,  // left
+    1, 2, 6,  1, 6, 5,  // right
+    0, 1, 5,  0, 5, 4,  // bottom
+    3, 7, 6,  3, 6, 2,  // top
+};
+// clang-format on
+
+const uint32_t indexCount = sizeof(indices) / sizeof(indices[0]);
+
+std::string loadShader(const char* path) {
+    std::ifstream file(path);
+    if (!file) {
+        std::cerr << "Path to shader could not be opened!" << std::endl;
+        exit(1);
     }
-    @fragment fn fragmentMain() -> @location(0) vec4f {
-        return vec4f(1, 0, 1, 1);
-    }
-)";
+    std::string content(
+        (std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>()
+    );
+    return content;
+}
 
 void configureSurface();
+void createBuffers();
+void createDepthTexture();
 void createRenderPipeline();
 void startRenderLoop();
 inline void onDeviceReady();
@@ -85,7 +124,6 @@ void initAdapterAndDevice() {
                 std::cerr << "WebGPU error " << static_cast<int>(type)
                         << ": " << msg.data << std::endl;
             });
-
         app.adapter.RequestDevice(
             &devDesc,
             wgpu::CallbackMode::AllowSpontaneous,
@@ -98,9 +136,8 @@ void initAdapterAndDevice() {
                 onDeviceReady();
             }
         );
-    }; 
+    };
     wgpu::RequestAdapterOptions opts{ .compatibleSurface = app.surface };
-    
     app.instance.RequestAdapter(
         &opts,
         wgpu::CallbackMode::AllowSpontaneous,
@@ -115,7 +152,6 @@ void initAdapterAndDevice() {
     );
 #else
     wgpu::RequestAdapterOptions opts{ .compatibleSurface = app.surface };
-
     wgpu::Future f1 = app.instance.RequestAdapter(
         &opts,
         wgpu::CallbackMode::WaitAnyOnly,
@@ -132,11 +168,9 @@ void initAdapterAndDevice() {
     wgpu::DeviceDescriptor devDesc{};
     devDesc.SetUncapturedErrorCallback(
         [](const wgpu::Device&, wgpu::ErrorType type, wgpu::StringView msg) {
-            std::cerr << "WebGPU error " << type
-                      << ": " << msg.data << std::endl;
+            std::cerr << "WebGPU error " << type << ": " << msg.data << std::endl;
         }
     );
-
     wgpu::Future f2 = app.adapter.RequestDevice(
         &devDesc,
         wgpu::CallbackMode::WaitAnyOnly,
@@ -149,7 +183,6 @@ void initAdapterAndDevice() {
         }
     );
     app.instance.WaitAny(f2, UINT64_MAX);
-    
     onDeviceReady();
 #endif
 }
@@ -168,20 +201,80 @@ void configureSurface() {
     app.surface.Configure(&config);
 }
 
+// NEW: upload vertex and index data to the GPU
+void createBuffers() {
+    wgpu::BufferDescriptor vbDesc{
+        .label            = "vertex buffer",
+        .usage            = wgpu::BufferUsage::Vertex | wgpu::BufferUsage::CopyDst,
+        .size             = sizeof(vertices),
+        .mappedAtCreation = false,
+    };
+    app.vertexBuffer = app.device.CreateBuffer(&vbDesc);
+    app.device.GetQueue().WriteBuffer(app.vertexBuffer, 0, vertices, sizeof(vertices));
+
+    wgpu::BufferDescriptor ibDesc{
+        .label            = "index buffer",
+        .usage            = wgpu::BufferUsage::Index | wgpu::BufferUsage::CopyDst,
+        .size             = sizeof(indices),
+        .mappedAtCreation = false,
+    };
+    app.indexBuffer = app.device.CreateBuffer(&ibDesc);
+    app.device.GetQueue().WriteBuffer(app.indexBuffer, 0, indices, sizeof(indices));
+}
+
+// NEW: depth texture so back faces don't overdraw front faces
+void createDepthTexture() {
+    wgpu::TextureDescriptor depthDesc{
+        .usage          = wgpu::TextureUsage::RenderAttachment,
+        .dimension      = wgpu::TextureDimension::e2D,
+        .size           = { static_cast<uint32_t>(app.wWidth),
+                            static_cast<uint32_t>(app.wHeight), 1 },
+        .format         = wgpu::TextureFormat::Depth24Plus,
+        .mipLevelCount  = 1,
+        .sampleCount    = 1,
+    };
+    app.depthTexture = app.device.CreateTexture(&depthDesc);
+}
+
 void createRenderPipeline() {
-    wgpu::ShaderSourceWGSL wgsl{{.code = shaderSource}};
+    std::string shaderSource = loadShader("./src/shaders/shader.wgsl");
+    wgpu::ShaderSourceWGSL wgsl{{ .code = shaderSource.c_str()}};
     wgpu::ShaderModuleDescriptor smDesc{.nextInChain = &wgsl};
     wgpu::ShaderModule shader = app.device.CreateShaderModule(&smDesc);
 
-    wgpu::ColorTargetState colorTarget{.format = app.format};
+    // Describe the vertex buffer layout: one float32x3 attribute at location 0
+    wgpu::VertexAttribute posAttr{
+        .format         = wgpu::VertexFormat::Float32x3,
+        .offset         = 0,
+        .shaderLocation = 0,
+    };
+    wgpu::VertexBufferLayout vertLayout{
+        .arrayStride    = 3 * sizeof(float),  // one vertex = 3 floats
+        .attributeCount = 1,
+        .attributes     = &posAttr,
+    };
+
+    // Depth stencil state: write depth, pass if closer
+    wgpu::DepthStencilState depthStencil{
+        .format            = wgpu::TextureFormat::Depth24Plus,
+        .depthWriteEnabled = wgpu::OptionalBool::True, // use `true` on older Dawn
+        .depthCompare      = wgpu::CompareFunction::Less,
+    };
+
+    wgpu::ColorTargetState colorTarget{ .format = app.format };
     wgpu::FragmentState fragState{
         .module      = shader,
         .targetCount = 1,
         .targets     = &colorTarget,
     };
     wgpu::RenderPipelineDescriptor pipeDesc{
-        .vertex   = {.module = shader},
-        .fragment = &fragState,
+        .vertex = {
+            .module      = shader,
+            .bufferCount = 1,
+            .buffers     = &vertLayout,
+        },
+        .depthStencil = &depthStencil,
+        .fragment     = &fragState,
     };
     app.pipeline = app.device.CreateRenderPipeline(&pipeDesc);
 }
@@ -194,20 +287,32 @@ void render() {
     wgpu::SurfaceTexture surfaceTexture;
     app.surface.GetCurrentTexture(&surfaceTexture);
 
-    wgpu::RenderPassColorAttachment attachment{
+    wgpu::RenderPassColorAttachment colorAttachment{
         .view    = surfaceTexture.texture.CreateView(),
         .loadOp  = wgpu::LoadOp::Clear,
         .storeOp = wgpu::StoreOp::Store,
     };
+
+    // NEW: depth attachment cleared to 1.0 (far plane) each frame
+    wgpu::RenderPassDepthStencilAttachment depthAttachment{
+        .view            = app.depthTexture.CreateView(),
+        .depthLoadOp     = wgpu::LoadOp::Clear,
+        .depthStoreOp    = wgpu::StoreOp::Store,
+        .depthClearValue = 1.0f,
+    };
+
     wgpu::RenderPassDescriptor passDesc{
-        .colorAttachmentCount = 1,
-        .colorAttachments     = &attachment,
+        .colorAttachmentCount   = 1,
+        .colorAttachments       = &colorAttachment,
+        .depthStencilAttachment = &depthAttachment,
     };
 
     wgpu::CommandEncoder encoder = app.device.CreateCommandEncoder();
     wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&passDesc);
     pass.SetPipeline(app.pipeline);
-    pass.Draw(3);
+    pass.SetVertexBuffer(0, app.vertexBuffer);                          // NEW
+    pass.SetIndexBuffer(app.indexBuffer, wgpu::IndexFormat::Uint16);   // NEW
+    pass.DrawIndexed(indexCount);                                       // NEW
     pass.End();
 
     wgpu::CommandBuffer commands = encoder.Finish();
@@ -231,6 +336,8 @@ void startRenderLoop() {
 
 inline void onDeviceReady() {
     configureSurface();
+    createBuffers();       // NEW
+    createDepthTexture();  // NEW
     createRenderPipeline();
     startRenderLoop();
 }
