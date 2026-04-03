@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ "$1" != "--debug" ]; then
-    cmake -B build
+    emcmake cmake -B build-web
 fi
 
 cmake --build build-web -j4

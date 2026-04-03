@@ -12,7 +12,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
-add_executable(app "src/main.cpp")
+add_executable(app 
+  "src/main.cpp"
+  "src/app.cpp"
+)
+target_include_directories(app PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
 
 set(DAWN_FETCH_DEPENDENCIES ON)
 add_subdirectory("dawn" EXCLUDE_FROM_ALL)
@@ -24,8 +30,7 @@ if(EMSCRIPTEN)
   target_link_libraries(app PRIVATE emdawnwebgpu_cpp glm::glm)
   
   # Flags for Emscripten to handle the canvas and async nature of WebGPU
-  target_link_options(
-    app PRIVATE 
+  target_link_options(app PRIVATE 
     "-sASYNCIFY=1" 
     "-sUSE_GLFW=3"
     "--preload-file" "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders@/src/shaders"
