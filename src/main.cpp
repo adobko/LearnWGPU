@@ -17,19 +17,19 @@
 #include <webgpu/webgpu_cpp.h>
 
 struct App {
-    GLFWwindow*          window          = nullptr;
-    wgpu::Instance       instance        = nullptr;
-    wgpu::Adapter        adapter         = nullptr;
-    wgpu::Surface        surface         = nullptr;
-    wgpu::Device         device          = nullptr;
-    wgpu::RenderPipeline pipeline        = nullptr;
-    wgpu::Buffer         vertexBuffer    = nullptr;
-    wgpu::Buffer         indexBuffer     = nullptr;
-    wgpu::Buffer         uniformBuffer   = nullptr;  // NEW: holds the MVP matrix
-    wgpu::BindGroupLayout bindGroupLayout = nullptr; // NEW
-    wgpu::BindGroup      bindGroup       = nullptr;  // NEW
-    wgpu::Texture        depthTexture    = nullptr;
-    wgpu::TextureFormat  format          = wgpu::TextureFormat::BGRA8Unorm;
+    GLFWwindow*          window           = nullptr;
+    wgpu::Instance       instance         = nullptr;
+    wgpu::Adapter        adapter          = nullptr;
+    wgpu::Surface        surface          = nullptr;
+    wgpu::Device         device           = nullptr;
+    wgpu::RenderPipeline pipeline         = nullptr;
+    wgpu::Buffer         vertexBuffer     = nullptr;
+    wgpu::Buffer         indexBuffer      = nullptr;
+    wgpu::Buffer         uniformBuffer    = nullptr;
+    wgpu::BindGroupLayout bindGroupLayout = nullptr;
+    wgpu::BindGroup      bindGroup        = nullptr;
+    wgpu::Texture        depthTexture     = nullptr;
+    wgpu::TextureFormat  format           = wgpu::TextureFormat::BGRA8Unorm;
     const int   wWidth  = 800;
     const int   wHeight = 600;
     const char* wTitle  = "WebGPU";
@@ -74,7 +74,6 @@ std::string loadShader(const char* path) {
 
 void configureSurface();
 void createBuffers();
-void createUniformBuffer();
 void createBindGroup();
 void createDepthTexture();
 void createRenderPipeline();
@@ -215,15 +214,14 @@ void createBuffers() {
     };
     app.indexBuffer = app.device.CreateBuffer(&ibDesc);
     app.device.GetQueue().WriteBuffer(app.indexBuffer, 0, indices, sizeof(indices));
-}
 
-void createUniformBuffer() {
-    wgpu::BufferDescriptor desc{
+    wgpu::BufferDescriptor ubDesc{
         .label = "uniform buffer (MVP)",
         .usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst,
-        .size  = sizeof(glm::mat4),
+        .size  = 3 * 256, // minUniformBufferOffsetAlignment = 256
     };
-    app.uniformBuffer = app.device.CreateBuffer(&desc);
+    app.uniformBuffer = app.device.CreateBuffer(&ubDesc);
+    // We do not write this buffer yet as it dynamically canges each frame
 }
 
 void createBindGroup() {
@@ -231,8 +229,9 @@ void createBindGroup() {
         .binding    = 0,
         .visibility = wgpu::ShaderStage::Vertex,
         .buffer     = {
-            .type           = wgpu::BufferBindingType::Uniform,
-            .minBindingSize = sizeof(glm::mat4),
+            .type             = wgpu::BufferBindingType::Uniform,
+            .hasDynamicOffset = true,
+            .minBindingSize   = sizeof(glm::mat4),
         },
     };
     wgpu::BindGroupLayoutDescriptor bglDesc{
@@ -300,13 +299,15 @@ void createRenderPipeline() {
     wgpu::ColorTargetState colorTarget{ .format = app.format };
     wgpu::FragmentState fragState{
         .module      = shader,
+        .entryPoint = "fragmentMain",
         .targetCount = 1,
         .targets     = &colorTarget,
     };
     wgpu::RenderPipelineDescriptor pipeDesc{
-        .layout  = pipelineLayout,   // NEW
+        .layout  = pipelineLayout,
         .vertex  = {
             .module      = shader,
+            .entryPoint = "vertexMain",
             .bufferCount = 1,
             .buffers     = &vertLayout,
         },
@@ -324,22 +325,41 @@ void render() {
     // ── Build MVP matrix with GLM ─────────────────────────────────────────────
     float time = static_cast<float>(glfwGetTime());
 
-    glm::mat4 model = glm::rotate(glm::mat4(1.0f),
-                                  time,
-                                  glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 model = glm::rotate(
+        glm::mat4(1.0f), 
+        time, 
+        glm::vec3(0.0f, 1.0f, 0.0f)
+    );
 
-    glm::mat4 view  = glm::lookAt(glm::vec3(0.0f, 1.0f, 2.0f),
-                                  glm::vec3(0.0f, 0.0f, 0.0f),
-                                  glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 view  = glm::lookAt(
+        glm::vec3(0.0f, 1.0f, 2.0f),        
+        glm::vec3(0.0f, 0.0f, 0.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f)
+    );
 
-    glm::mat4 proj  = glm::perspective(glm::radians(60.0f),
-                                       static_cast<float>(app.wWidth) /
-                                       static_cast<float>(app.wHeight),
-                                       0.1f, 10.0f);
+    glm::mat4 proj  = glm::perspective(
+        glm::radians(60.0f),        
+        static_cast<float>(app.wWidth) / static_cast<float>(app.wHeight),               
+        0.1f, 10.0f
+    );
 
     glm::mat4 mvp = proj * view * model;
 
-    app.device.GetQueue().WriteBuffer(app.uniformBuffer, 0, &mvp, sizeof(mvp));
+    uint32_t offset0 = 0;
+    uint32_t offset1 = 256;
+    uint32_t offset2 = 2 * 256;
+
+    app.device.GetQueue().WriteBuffer(app.uniformBuffer, offset0, &mvp, sizeof(mvp));
+
+    glm::mat4 model2 = glm::translate(model, glm::vec3(0.5f, 0.5f, 0.5f));
+    model2 = glm::scale(model2, glm::vec3(0.5f, 0.5f, 0.5f));
+    glm::mat4 mvp2 = proj * view * model2;
+    app.device.GetQueue().WriteBuffer(app.uniformBuffer, offset1, &mvp2, sizeof(mvp2));
+
+    glm::mat4 model3 = glm::translate(model, glm::vec3(-0.5f, -0.5f, -0.5f));
+    model2 = glm::scale(model2, glm::vec3(0.75f, 0.75f, 0.75f));
+    glm::mat4 mvp3 = proj * view * model3;
+    app.device.GetQueue().WriteBuffer(app.uniformBuffer, offset2, &mvp3, sizeof(mvp3));
 
     // ── Draw ──────────────────────────────────────────────────────────────────
     wgpu::SurfaceTexture surfaceTexture;
@@ -366,11 +386,20 @@ void render() {
 
     wgpu::CommandEncoder encoder = app.device.CreateCommandEncoder();
     wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&passDesc);
+    
     pass.SetPipeline(app.pipeline);
-    pass.SetBindGroup(0, app.bindGroup);
     pass.SetVertexBuffer(0, app.vertexBuffer);
     pass.SetIndexBuffer(app.indexBuffer, wgpu::IndexFormat::Uint16);
+    
+    pass.SetBindGroup(0, app.bindGroup, 1, &offset0);
     pass.DrawIndexed(indexCount);
+
+    pass.SetBindGroup(0, app.bindGroup, 1, &offset1);
+    pass.DrawIndexed(indexCount);
+
+    pass.SetBindGroup(0, app.bindGroup, 1, &offset2);
+    pass.DrawIndexed(indexCount);
+
     pass.End();
 
     wgpu::CommandBuffer commands = encoder.Finish();
@@ -395,7 +424,6 @@ void startRenderLoop() {
 inline void onDeviceReady() {
     configureSurface();
     createBuffers();
-    createUniformBuffer();
     createBindGroup();
     createDepthTexture();
     createRenderPipeline();
