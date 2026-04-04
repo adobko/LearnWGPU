@@ -17,8 +17,12 @@
 #include <webgpu/webgpu_cpp.h>
 
 #include "app.hpp"
+#include "camera.hpp"
 
 std::string loadShader();
+void handleMovemetInput(GLFWwindow* window);
+void handleMousePos(GLFWwindow* window, double xpos, double ypos);
+void handleMouseWheel(GLFWwindow* window, double xoffset, double yoffset);
 void createBuffers();
 void createBindGroup();
 void createRenderPipeline();
@@ -54,6 +58,10 @@ wgpu::Buffer         uniformBuffer    = nullptr;
 wgpu::BindGroupLayout bindGroupLayout = nullptr;
 wgpu::BindGroup      bindGroup        = nullptr;
 
+float currentTime;
+float lastTime;
+float deltaTime;
+
 static App app(
     800, 600, "WebGPU",
     []() {
@@ -64,9 +72,64 @@ static App app(
     }
 );
 
+static Camera cam(
+    glm::vec3(0.0f, 0.0f, 5.0f),
+    glm::vec3(0.0f, 1.0f, 0.0f)
+);
+
 int main() {
+    // Setup Camera
+    glfwSetInputMode(app.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetCursorPosCallback(app.window, handleMousePos);
+    glfwSetScrollCallback(app.window, handleMouseWheel);
+
+    
+    // Get Device, setup render pipeline and kick off render loop
     app.initDeviceAndRun();
     return 0;
+}
+
+void handleMovemetInput(GLFWwindow* window) {
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE))
+        glfwSetWindowShouldClose(window, true);
+
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+        cam.move(CameraMovement::FORWARD, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+        cam.move(CameraMovement::BACKWARD, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+        cam.move(CameraMovement::LEFT, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+        cam.move(CameraMovement::RIGHT, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+        cam.move(CameraMovement::UP, deltaTime);
+    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
+        cam.move(CameraMovement::DOWN, deltaTime);
+    
+}
+
+void handleMousePos(GLFWwindow* window, double xpos, double ypos) {
+    static bool firstMouse = true;
+    glm::vec2 newMousePos(
+        static_cast<float>(xpos), 
+        static_cast<float>(ypos)
+    );
+
+    if (firstMouse) {
+        cam.mousePos.x = app.wWidth / 2;
+        cam.mousePos.y = app.wHeight / 2;
+        firstMouse= false;
+    }
+
+    cam.rotate(glm::vec2(
+        newMousePos.x - cam.mousePos.x, 
+        cam.mousePos.y - newMousePos.y
+    ));
+    cam.mousePos = newMousePos;
+}
+
+void handleMouseWheel(GLFWwindow* window, double xoffset, double yoffset) {
+    cam.zoom(yoffset);
 }
 
 std::string loadShader(const char* path) {
@@ -191,6 +254,10 @@ void render() {
 #if !defined(__EMSCRIPTEN__)
     glfwPollEvents();
 #endif
+    lastTime = currentTime;
+    currentTime = glfwGetTime();
+    deltaTime = currentTime - lastTime;
+    handleMovemetInput(app.window);
 
     // ── Build MVP matrix with GLM ─────────────────────────────────────────────
     float time = static_cast<float>(glfwGetTime());
@@ -201,14 +268,10 @@ void render() {
         glm::vec3(0.0f, 1.0f, 0.0f)
     );
 
-    glm::mat4 view  = glm::lookAt(
-        glm::vec3(0.0f, 1.0f, 2.0f),        
-        glm::vec3(0.0f, 0.0f, 0.0f),
-        glm::vec3(0.0f, 1.0f, 0.0f)
-    );
+    glm::mat4 view  = cam.getViewMatrix();
 
     glm::mat4 proj  = glm::perspective(
-        glm::radians(60.0f),        
+        glm::radians(cam.fov),        
         static_cast<float>(app.wWidth) / static_cast<float>(app.wHeight),               
         0.1f, 10.0f
     );

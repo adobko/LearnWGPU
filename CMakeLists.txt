@@ -15,6 +15,7 @@ FetchContent_MakeAvailable(glm)
 add_executable(app 
   "src/main.cpp"
   "src/app.cpp"
+  "src/camera.cpp"
 )
 target_include_directories(app PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"

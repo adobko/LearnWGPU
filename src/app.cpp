@@ -26,6 +26,7 @@ void App::initGLFW() {
         nullptr, 
         nullptr
     );
+    glfwMakeContextCurrent(window);
 }
 
 void App::initWGPU() {
