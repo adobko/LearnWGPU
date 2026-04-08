@@ -12,6 +12,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
+# STB
+FetchContent_Declare(
+  stb
+  GIT_REPOSITORY https://github.com/nothings/stb.git
+  GIT_TAG        master
+  GIT_PROGRESS   TRUE
+)
+FetchContent_MakeAvailable(stb)
+
 add_executable(app 
   "src/main.cpp"
   "src/app.cpp"
@@ -19,6 +28,7 @@ add_executable(app
 )
 target_include_directories(app PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${stb_SOURCE_DIR}"
 )
 
 set(DAWN_FETCH_DEPENDENCIES ON)

@@ -1,5 +1,6 @@
 #include <iostream>
 #include <fstream>
+#include <cstdint>
 #include <string>
 #include <GLFW/glfw3.h>
 
@@ -7,6 +8,9 @@
 #define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 #if defined(__EMSCRIPTEN__)
     #include <emscripten/emscripten.h>
@@ -16,41 +20,22 @@
 #endif
 #include <webgpu/webgpu_cpp.h>
 
+#include "cube.hpp"
 #include "app.hpp"
 #include "camera.hpp"
 
-std::string loadShader();
 void handleMovemetInput(GLFWwindow* window);
 void handleMousePos(GLFWwindow* window, double xpos, double ypos);
 void handleMouseWheel(GLFWwindow* window, double xoffset, double yoffset);
+std::string loadShader(const char* path);
+wgpu::Texture loadTexture(const char* path);
 void createBuffers();
 void createBindGroup();
 void createRenderPipeline();
 void render();
 void startRenderLoop();
 
-// clang-format off
-const float vertices[] = {
-    -0.5f, -0.5f, -0.5f,  // 0 back-bottom-left
-     0.5f, -0.5f, -0.5f,  // 1 back-bottom-right
-     0.5f,  0.5f, -0.5f,  // 2 back-top-right
-    -0.5f,  0.5f, -0.5f,  // 3 back-top-left
-    -0.5f, -0.5f,  0.5f,  // 4 front-bottom-left
-     0.5f, -0.5f,  0.5f,  // 5 front-bottom-right
-     0.5f,  0.5f,  0.5f,  // 6 front-top-right
-    -0.5f,  0.5f,  0.5f,  // 7 front-top-left
-};
 
-const uint16_t indices[] = {
-    0, 2, 1,  0, 3, 2,  // back
-    4, 5, 6,  4, 6, 7,  // front
-    0, 4, 7,  0, 7, 3,  // left
-    1, 2, 6,  1, 6, 5,  // right
-    0, 1, 5,  0, 5, 4,  // bottom
-    3, 7, 6,  3, 6, 2,  // top
-};
-
-const uint32_t indexCount = sizeof(indices) / sizeof(indices[0]);
 
 wgpu::Buffer         vertexBuffer     = nullptr;
 wgpu::Buffer         indexBuffer      = nullptr;
@@ -83,7 +68,6 @@ int main() {
     glfwSetCursorPosCallback(app.window, handleMousePos);
     glfwSetScrollCallback(app.window, handleMouseWheel);
 
-    
     // Get Device, setup render pipeline and kick off render loop
     app.initDeviceAndRun();
     return 0;
@@ -142,6 +126,56 @@ std::string loadShader(const char* path) {
         (std::istreambuf_iterator<char>(file)),
         std::istreambuf_iterator<char>()
     );
+}
+
+wgpu::Texture loadTexture(const char* path) {
+    int w, h, ch;
+    u_int8_t* image = stbi_load(path, &w, &h, &ch, STBI_rgb_alpha);
+    if (!image) {
+        std::cerr << "Could not load texture: " << stbi_failure_reason() << std::endl;
+        exit(1);
+    }
+    uint32_t width = static_cast<uint32_t>(w);
+    uint32_t height = static_cast<uint32_t>(h);
+
+    wgpu::TextureDescriptor texDesc{
+        .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst,
+        .dimension       = wgpu::TextureDimension::e2D,
+        .size = { .width = width, .height = height, .depthOrArrayLayers = 1 },
+        .format = wgpu::TextureFormat::RGBA8Unorm,
+    };
+    
+    wgpu::Texture tex = app.device.CreateTexture(&texDesc);
+    
+    wgpu::TexelCopyTextureInfo texDest{ 
+        .texture = tex, 
+        .mipLevel = 0,
+        .origin   = { 0, 0, 0 },
+        .aspect   = wgpu::TextureAspect::All,
+    };
+    
+    wgpu::TexelCopyBufferLayout dataLayout{
+        .offset = 0,
+        .bytesPerRow = 4 * width, // R, G, B, A -> (4 bytes)
+        .rowsPerImage = height,
+    };
+
+    wgpu::Extent3D writeSize{
+        .width = width,
+        .height = height,
+        .depthOrArrayLayers = 1,
+    };
+
+    app.device.GetQueue().WriteTexture(
+        &texDest, 
+        image, 
+        4 * width * height, 
+        &dataLayout, 
+        &writeSize
+    );
+    
+    stbi_image_free(image);
+    return tex;
 }
 
 void createBuffers() {
