@@ -130,7 +130,7 @@ std::string loadShader(const char* path) {
 
 wgpu::Texture loadTexture(const char* path) {
     int w, h, ch;
-    u_int8_t* image = stbi_load(path, &w, &h, &ch, STBI_rgb_alpha);
+    uint8_t* image = stbi_load(path, &w, &h, &ch, STBI_rgb_alpha);
     if (!image) {
         std::cerr << "Could not load texture: " << stbi_failure_reason() << std::endl;
         exit(1);
@@ -205,31 +205,53 @@ void createBuffers() {
 }
 
 void createBindGroup() {
-    wgpu::BindGroupLayoutEntry layoutEntry{
-        .binding    = 0,
-        .visibility = wgpu::ShaderStage::Vertex,
-        .buffer     = {
-            .type             = wgpu::BufferBindingType::Uniform,
-            .hasDynamicOffset = true,
-            .minBindingSize   = sizeof(glm::mat4),
+    wgpu::BindGroupLayoutEntry layoutEntry[3] = {
+        { // MVP matrix       
+            .binding    = 0,
+            .visibility = wgpu::ShaderStage::Vertex,
+            .buffer     = {
+                .type             = wgpu::BufferBindingType::Uniform,
+                .hasDynamicOffset = true,
+                .minBindingSize   = sizeof(glm::mat4),
+            },
+        },
+        { // Texture
+            .binding    = 1,
+            .visibility = wgpu::ShaderStage::Fragment,
+            .texture    = {
+                .sampleType    = wgpu::TextureSampleType::Float,
+                .viewDimension = wgpu::TextureViewDimension::e2D
+            },
+        }, 
+        { // Sampler
+            .binding    = 2,
+            .visibility = wgpu::ShaderStage::Fragment,
+            .sampler    = { .type = wgpu::SamplerBindingType::Filtering },
         },
     };
     wgpu::BindGroupLayoutDescriptor bglDesc{
-        .entryCount = 1,
-        .entries    = &layoutEntry,
+        .entryCount = 3,
+        .entries    = layoutEntry,
     };
     bindGroupLayout = app.device.CreateBindGroupLayout(&bglDesc);
 
-    wgpu::BindGroupEntry bgEntry{
-        .binding = 0,
-        .buffer  = uniformBuffer,
-        .offset  = 0,
-        .size    = sizeof(glm::mat4),
+    // Loading the texture
+    wgpu::Texture tex = loadTexture("./assets/dirt.png");
+    wgpu::SamplerDescriptor sDesc{
+        .magFilter = wgpu::FilterMode::Nearest,
+        .minFilter = wgpu::FilterMode::Nearest,
+    };
+    wgpu::Sampler sampler = app.device.CreateSampler(&sDesc);
+
+    wgpu::BindGroupEntry bgEntry[3] = {
+        { .binding = 0, .buffer = uniformBuffer, .offset = 0, .size = sizeof(glm::mat4) },
+        { .binding = 1, .textureView = tex.CreateView() },
+        { .binding = 2, .sampler = sampler },
     };
     wgpu::BindGroupDescriptor bgDesc{
         .layout     = bindGroupLayout,
-        .entryCount = 1,
-        .entries    = &bgEntry,
+        .entryCount = 3,
+        .entries    = bgEntry,
     };
     bindGroup = app.device.CreateBindGroup(&bgDesc);
 }
@@ -240,15 +262,14 @@ void createRenderPipeline() {
     wgpu::ShaderModuleDescriptor smDesc{ .nextInChain = &wgsl };
     wgpu::ShaderModule shader = app.device.CreateShaderModule(&smDesc);
 
-    wgpu::VertexAttribute posAttr{
-        .format         = wgpu::VertexFormat::Float32x3,
-        .offset         = 0,
-        .shaderLocation = 0,
+    wgpu::VertexAttribute posAttr[2] = {
+        { .format = wgpu::VertexFormat::Float32x3, .offset = 0, .shaderLocation = 0 }, // pos
+        { .format = wgpu::VertexFormat::Float32x2, .offset = 3 * sizeof(float), .shaderLocation = 1 }, // uv
     };
     wgpu::VertexBufferLayout vertLayout{
-        .arrayStride    = 3 * sizeof(float),
-        .attributeCount = 1,
-        .attributes     = &posAttr,
+        .arrayStride    = 5 * sizeof(float),
+        .attributeCount = 2,
+        .attributes     = posAttr,
     };
 
     wgpu::DepthStencilState depthStencil{
@@ -336,6 +357,7 @@ void render() {
         .view    = surfaceTexture.texture.CreateView(),
         .loadOp  = wgpu::LoadOp::Clear,
         .storeOp = wgpu::StoreOp::Store,
+        .clearValue = { 0.0f, 0.0f, 0.0f, 0.0f },
     };
 
     wgpu::RenderPassDepthStencilAttachment depthAttachment{
