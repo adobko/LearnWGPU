@@ -2,6 +2,7 @@
 #include <fstream>
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <GLFW/glfw3.h>
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -29,6 +30,7 @@ void handleMousePos(GLFWwindow* window, double xpos, double ypos);
 void handleMouseWheel(GLFWwindow* window, double xoffset, double yoffset);
 std::string loadShader(const char* path);
 wgpu::Texture loadTexture(const char* path);
+wgpu::Texture loadTextureArray(std::vector<const char*> paths);
 void createBuffers();
 void createBindGroup();
 void createRenderPipeline();
@@ -63,6 +65,8 @@ static Camera cam(
 );
 
 int main() {
+    // STBI setup
+    stbi_set_flip_vertically_on_load(true);
     // Setup Camera
     glfwSetInputMode(app.window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetCursorPosCallback(app.window, handleMousePos);
@@ -156,7 +160,7 @@ wgpu::Texture loadTexture(const char* path) {
     
     wgpu::TexelCopyBufferLayout dataLayout{
         .offset = 0,
-        .bytesPerRow = 4 * width, // R, G, B, A -> (4 bytes)
+        .bytesPerRow = 4u * width, // R, G, B, A -> (4 bytes)
         .rowsPerImage = height,
     };
 
@@ -169,12 +173,81 @@ wgpu::Texture loadTexture(const char* path) {
     app.device.GetQueue().WriteTexture(
         &texDest, 
         image, 
-        4 * width * height, 
+        4u * width * height, 
         &dataLayout, 
         &writeSize
     );
     
     stbi_image_free(image);
+    return tex;
+}
+
+wgpu::Texture loadTextureArray(std::vector<const char*> paths) {    
+    int w, h, ch;
+    uint8_t* first = stbi_load(paths[0], &w, &h, &ch, STBI_rgb_alpha);
+    if (!first) {
+        std::cerr << "Could not load texture: " << stbi_failure_reason() << std::endl;
+        exit(1);
+    }
+    uint32_t width = static_cast<uint32_t>(w);
+    uint32_t height = static_cast<uint32_t>(h);
+    uint32_t layerCount = static_cast<uint32_t>(paths.size());
+    
+    wgpu::TextureDescriptor texDesc{
+        .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst,
+        .dimension = wgpu::TextureDimension::e2D,
+        .size = {.width = width, .height = height, .depthOrArrayLayers = layerCount},
+        .format = wgpu::TextureFormat::RGBA8Unorm,
+    };
+    wgpu::Texture tex = app.device.CreateTexture(&texDesc);
+    
+    wgpu::TexelCopyBufferLayout dataLayout{
+        .offset = 0,
+        .bytesPerRow = 4u * width, // R, G, B, A -> (4 bytes)
+        .rowsPerImage = height,
+    };
+
+    wgpu::Extent3D writeSize{
+        .width = width,
+        .height = height,
+        .depthOrArrayLayers = 1,
+    };
+
+    static const auto writeLayer = [&](uint32_t i, uint8_t* image) {
+        wgpu::TexelCopyTextureInfo texDest{
+            .texture = tex,
+            .mipLevel = 0,
+            .origin = { 0, 0, i },
+            .aspect = wgpu::TextureAspect::All,
+        };
+
+        app.device.GetQueue().WriteTexture(
+            &texDest, 
+            image, 
+            4u * width * height,
+            &dataLayout,
+            &writeSize
+        );
+        stbi_image_free(image);
+    };
+
+    writeLayer(0u, first);
+
+    for (uint32_t i = 1u; i < layerCount; i++) {
+        int testW, testH;
+        uint8_t* image = stbi_load(paths[i], &testW, &testH, nullptr, STBI_rgb_alpha);
+        if (!image) {
+            std::cerr << "Could not load texture: " << stbi_failure_reason() << std::endl;
+            exit(1);
+        }
+        if (w != testW || h != testH) {
+            stbi_image_free(image);
+            std::cerr << "Texture dimesions do not match within a texture array!" << std::endl;
+            exit(1);
+        }
+
+        writeLayer(i, image);
+    }
     return tex;
 }
 
@@ -220,7 +293,7 @@ void createBindGroup() {
             .visibility = wgpu::ShaderStage::Fragment,
             .texture    = {
                 .sampleType    = wgpu::TextureSampleType::Float,
-                .viewDimension = wgpu::TextureViewDimension::e2D
+                .viewDimension = wgpu::TextureViewDimension::e2DArray
             },
         }, 
         { // Sampler
@@ -236,7 +309,16 @@ void createBindGroup() {
     bindGroupLayout = app.device.CreateBindGroupLayout(&bglDesc);
 
     // Loading the texture
-    wgpu::Texture tex = loadTexture("./assets/dirt.png");
+    // wgpu::Texture tex = loadTexture("./assets/dirt.png");
+    wgpu::Texture tex = loadTextureArray({
+        "./assets/dirt.png",
+        "./assets/grass_block_side.png",
+        "./assets/grass_block_top.png",
+    });
+    wgpu::TextureViewDescriptor tvDesc{
+        .dimension = wgpu::TextureViewDimension::e2DArray,
+        .arrayLayerCount=3, // Number of textures in the texture array
+    };
     wgpu::SamplerDescriptor sDesc{
         .magFilter = wgpu::FilterMode::Nearest,
         .minFilter = wgpu::FilterMode::Nearest,
@@ -245,7 +327,7 @@ void createBindGroup() {
 
     wgpu::BindGroupEntry bgEntry[3] = {
         { .binding = 0, .buffer = uniformBuffer, .offset = 0, .size = sizeof(glm::mat4) },
-        { .binding = 1, .textureView = tex.CreateView() },
+        { .binding = 1, .textureView = tex.CreateView(&tvDesc) },
         { .binding = 2, .sampler = sampler },
     };
     wgpu::BindGroupDescriptor bgDesc{
@@ -262,13 +344,14 @@ void createRenderPipeline() {
     wgpu::ShaderModuleDescriptor smDesc{ .nextInChain = &wgsl };
     wgpu::ShaderModule shader = app.device.CreateShaderModule(&smDesc);
 
-    wgpu::VertexAttribute posAttr[2] = {
-        { .format = wgpu::VertexFormat::Float32x3, .offset = 0, .shaderLocation = 0 }, // pos
+    wgpu::VertexAttribute posAttr[3] = {
+        { .format = wgpu::VertexFormat::Float32x3, .offset = 0,                 .shaderLocation = 0 }, // pos
         { .format = wgpu::VertexFormat::Float32x2, .offset = 3 * sizeof(float), .shaderLocation = 1 }, // uv
+        { .format = wgpu::VertexFormat::Float32,   .offset = 5 * sizeof(float), .shaderLocation = 2 }, // face
     };
     wgpu::VertexBufferLayout vertLayout{
-        .arrayStride    = 5 * sizeof(float),
-        .attributeCount = 2,
+        .arrayStride    = 6 * sizeof(float),
+        .attributeCount = 3,
         .attributes     = posAttr,
     };
 
