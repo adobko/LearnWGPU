@@ -39,11 +39,15 @@ void startRenderLoop();
 
 
 
-wgpu::Buffer         vertexBuffer     = nullptr;
-wgpu::Buffer         indexBuffer      = nullptr;
-wgpu::Buffer         uniformBuffer    = nullptr;
-wgpu::BindGroupLayout bindGroupLayout = nullptr;
-wgpu::BindGroup      bindGroup        = nullptr;
+wgpu::Buffer          vertexBuffer      = nullptr;
+wgpu::Buffer          indexBuffer       = nullptr;
+wgpu::Buffer          mMatrixBuffer     = nullptr;
+wgpu::Buffer          vpMatrixBuffer    = nullptr;
+wgpu::Buffer          shininnesBuffer   = nullptr;
+wgpu::BindGroupLayout bindGroupLayout   = nullptr;
+wgpu::BindGroup       bindGroup         = nullptr;
+wgpu::RenderPipeline        pipeline;
+
 
 float currentTime;
 float lastTime;
@@ -268,18 +272,31 @@ void createBuffers() {
     indexBuffer = app.device.CreateBuffer(&ibDesc);
     app.device.GetQueue().WriteBuffer(indexBuffer, 0, indices, sizeof(indices));
 
-    wgpu::BufferDescriptor ubDesc{
-        .label = "uniform buffer (MVP)",
+    wgpu::BufferDescriptor mbDesc{
+        .label = "model matrix buffer",
         .usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst,
-        .size  = 3 * 256, // minUniformBufferOffsetAlignment = 256
+        .size = 3 * 256, // minUniformBufferOffsetAlignment = 256
     };
-    uniformBuffer = app.device.CreateBuffer(&ubDesc);
-    // We do not write this buffer yet as it dynamically canges each frame
+    mMatrixBuffer = app.device.CreateBuffer(&mbDesc);
+
+    wgpu::BufferDescriptor vpbDesc{
+        .label = "view, perspective matrices buffer",
+        .usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst,
+        .size = 3 * 256,
+    };
+    vpMatrixBuffer = app.device.CreateBuffer(&vpbDesc);
+
+    wgpu::BufferDescriptor shDesc{
+        .label = "shininnes",
+        .usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst,
+        .size = 3 * 256,
+    };
+    shininnesBuffer = app.device.CreateBuffer(&shDesc);
 }
 
 void createBindGroup() {
-    wgpu::BindGroupLayoutEntry layoutEntry[3] = {
-        { // MVP matrix       
+    wgpu::BindGroupLayoutEntry layoutEntry[6] = {
+        { // Model Matrix       
             .binding    = 0,
             .visibility = wgpu::ShaderStage::Vertex,
             .buffer     = {
@@ -288,51 +305,86 @@ void createBindGroup() {
                 .minBindingSize   = sizeof(glm::mat4),
             },
         },
-        { // Texture
+        { // View and Perspective Matrices       
             .binding    = 1,
+            .visibility = wgpu::ShaderStage::Vertex,
+            .buffer     = {
+                .type             = wgpu::BufferBindingType::Uniform,
+                .hasDynamicOffset = true,
+                .minBindingSize   = sizeof(glm::mat4),
+            },
+        },
+        { // Diffuse Texture
+            .binding    = 2,
+            .visibility = wgpu::ShaderStage::Fragment,
+            .texture    = {
+                .sampleType    = wgpu::TextureSampleType::Float,
+                .viewDimension = wgpu::TextureViewDimension::e2DArray,
+            },
+        }, 
+        { // Specular Texture
+            .binding    = 3,
             .visibility = wgpu::ShaderStage::Fragment,
             .texture    = {
                 .sampleType    = wgpu::TextureSampleType::Float,
                 .viewDimension = wgpu::TextureViewDimension::e2DArray
             },
         }, 
+        { // Shininnes
+            .binding    = 4,
+            .visibility = wgpu::ShaderStage::Fragment,
+            .buffer     = {
+                .type             = wgpu::BufferBindingType::Uniform,
+                .hasDynamicOffset = true,
+                .minBindingSize   = sizeof(float),
+            }
+        }, 
         { // Sampler
-            .binding    = 2,
+            .binding    = 5,
             .visibility = wgpu::ShaderStage::Fragment,
             .sampler    = { .type = wgpu::SamplerBindingType::Filtering },
         },
     };
     wgpu::BindGroupLayoutDescriptor bglDesc{
-        .entryCount = 3,
+        .entryCount = 6,
         .entries    = layoutEntry,
     };
     bindGroupLayout = app.device.CreateBindGroupLayout(&bglDesc);
 
     // Loading the texture
     // wgpu::Texture tex = loadTexture("./assets/dirt.png");
-    wgpu::Texture tex = loadTextureArray({
-        "./assets/dirt.png",
-        "./assets/grass_block_side.png",
-        "./assets/grass_block_top.png",
+    wgpu::Texture diffTex = loadTextureArray({
+        "./assets/container.png",
+        "./assets/container.png",
+        "./assets/container.png",
     });
+    wgpu::Texture specTex = loadTextureArray({
+        "./assets/container_specular.png",
+        "./assets/container_specular.png",
+        "./assets/container_specular.png",
+    });
+
     wgpu::TextureViewDescriptor tvDesc{
         .dimension = wgpu::TextureViewDimension::e2DArray,
         .arrayLayerCount=3, // Number of textures in the texture array
     };
     wgpu::SamplerDescriptor sDesc{
-        .magFilter = wgpu::FilterMode::Nearest,
-        .minFilter = wgpu::FilterMode::Nearest,
+        .magFilter = wgpu::FilterMode::Linear,
+        .minFilter = wgpu::FilterMode::Linear,
     };
     wgpu::Sampler sampler = app.device.CreateSampler(&sDesc);
 
-    wgpu::BindGroupEntry bgEntry[3] = {
-        { .binding = 0, .buffer = uniformBuffer, .offset = 0, .size = sizeof(glm::mat4) },
-        { .binding = 1, .textureView = tex.CreateView(&tvDesc) },
-        { .binding = 2, .sampler = sampler },
+    wgpu::BindGroupEntry bgEntry[6] = {
+        { .binding = 0, .buffer = mMatrixBuffer,   .offset = 0, .size = sizeof(glm::mat4) },
+        { .binding = 1, .buffer = vpMatrixBuffer,  .offset = 0, .size = sizeof(glm::mat4) },
+        { .binding = 2, .textureView = diffTex.CreateView(&tvDesc) },
+        { .binding = 3, .textureView = specTex.CreateView(&tvDesc) },
+        { .binding = 4, .buffer = shininnesBuffer, .offset = 0, .size = sizeof(float) },
+        { .binding = 5, .sampler = sampler },
     };
     wgpu::BindGroupDescriptor bgDesc{
         .layout     = bindGroupLayout,
-        .entryCount = 3,
+        .entryCount = 6,
         .entries    = bgEntry,
     };
     bindGroup = app.device.CreateBindGroup(&bgDesc);
@@ -344,14 +396,15 @@ void createRenderPipeline() {
     wgpu::ShaderModuleDescriptor smDesc{ .nextInChain = &wgsl };
     wgpu::ShaderModule shader = app.device.CreateShaderModule(&smDesc);
 
-    wgpu::VertexAttribute posAttr[3] = {
+    wgpu::VertexAttribute posAttr[4] = {
         { .format = wgpu::VertexFormat::Float32x3, .offset = 0,                 .shaderLocation = 0 }, // pos
-        { .format = wgpu::VertexFormat::Float32x2, .offset = 3 * sizeof(float), .shaderLocation = 1 }, // uv
-        { .format = wgpu::VertexFormat::Float32,   .offset = 5 * sizeof(float), .shaderLocation = 2 }, // face
+        { .format = wgpu::VertexFormat::Float32x3, .offset = 3 * sizeof(float), .shaderLocation = 1 }, // normal
+        { .format = wgpu::VertexFormat::Float32x2, .offset = 6 * sizeof(float), .shaderLocation = 2 }, // uv
+        { .format = wgpu::VertexFormat::Float32,   .offset = 8 * sizeof(float), .shaderLocation = 3 }, // face
     };
     wgpu::VertexBufferLayout vertLayout{
-        .arrayStride    = 6 * sizeof(float),
-        .attributeCount = 3,
+        .arrayStride    = 9 * sizeof(float),
+        .attributeCount = 4,
         .attributes     = posAttr,
     };
 
@@ -385,7 +438,7 @@ void createRenderPipeline() {
         .depthStencil = &depthStencil,
         .fragment     = &fragState,
     };
-    app.pipeline = app.device.CreateRenderPipeline(&pipeDesc);
+    pipeline = app.device.CreateRenderPipeline(&pipeDesc);
 }
 
 void render() {
@@ -414,23 +467,26 @@ void render() {
         0.1f, 10.0f
     );
 
-    glm::mat4 mvp = proj * view * model;
+    glm::mat4 vp = proj * view;
 
     uint32_t offset0 = 0;
     uint32_t offset1 = 256;
     uint32_t offset2 = 2 * 256;
 
-    app.device.GetQueue().WriteBuffer(uniformBuffer, offset0, &mvp, sizeof(mvp));
+    app.device.GetQueue().WriteBuffer(mMatrixBuffer, offset0, &model, sizeof(model));
+    app.device.GetQueue().WriteBuffer(vpMatrixBuffer, offset0, &vp, sizeof(vp));
 
     glm::mat4 model2 = glm::translate(model, glm::vec3(0.5f, 0.5f, 0.5f));
     model2 = glm::scale(model2, glm::vec3(0.5f, 0.5f, 0.5f));
-    glm::mat4 mvp2 = proj * view * model2;
-    app.device.GetQueue().WriteBuffer(uniformBuffer, offset1, &mvp2, sizeof(mvp2));
+    glm::mat4 vp2 = proj * view;
+    app.device.GetQueue().WriteBuffer(mMatrixBuffer, offset1, &model2, sizeof(model2));
+    app.device.GetQueue().WriteBuffer(vpMatrixBuffer, offset1, &vp2, sizeof(vp2));
 
     glm::mat4 model3 = glm::translate(model, glm::vec3(-0.5f, -0.5f, -0.5f));
     model2 = glm::scale(model2, glm::vec3(0.75f, 0.75f, 0.75f));
-    glm::mat4 mvp3 = proj * view * model3;
-    app.device.GetQueue().WriteBuffer(uniformBuffer, offset2, &mvp3, sizeof(mvp3));
+    glm::mat4 vp3 = proj * view;
+    app.device.GetQueue().WriteBuffer(mMatrixBuffer, offset2, &model3, sizeof(model3));
+    app.device.GetQueue().WriteBuffer(vpMatrixBuffer, offset2, &vp3, sizeof(vp3));
 
     // ── Draw ──────────────────────────────────────────────────────────────────
     wgpu::SurfaceTexture surfaceTexture;
@@ -459,7 +515,7 @@ void render() {
     wgpu::CommandEncoder encoder = app.device.CreateCommandEncoder();
     wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&passDesc);
     
-    pass.SetPipeline(app.pipeline);
+    pass.SetPipeline(pipeline);
     pass.SetVertexBuffer(0, vertexBuffer);
     pass.SetIndexBuffer(indexBuffer, wgpu::IndexFormat::Uint16);
     

@@ -172,7 +172,6 @@ App::~App() {
         surface.Unconfigure();
         surface = nullptr;
     }
-    if (pipeline) pipeline = nullptr;
     if (surface) {
         surface.Unconfigure();
         surface = nullptr;

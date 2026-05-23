@@ -8,7 +8,6 @@ public:
     wgpu::Instance              instance;
     wgpu::Surface               surface;     
     wgpu::Device                device;
-    wgpu::RenderPipeline        pipeline;
     wgpu::Texture               depthTexture;
     wgpu::TextureFormat         format;    
     const int                   wWidth;

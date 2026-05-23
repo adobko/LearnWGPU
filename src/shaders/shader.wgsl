@@ -2,6 +2,12 @@ struct Uniforms {
     mvp : mat4x4f,
 };
 
+struct Material {
+    diffuse   : texture_2d_array<f32>
+    specular  : texture_2d_array<f32>
+    shininess : f32
+}
+
 @group(0) @binding(0) var<uniform> uniforms    : Uniforms;
 @group(0) @binding(1) var          tex         : texture_2d_array<f32>;
 @group(0) @binding(2) var          texSampler  : sampler;
